@@ -1,8 +1,16 @@
 // app/pairing/GeneratePairing.tsx
 // Used by the REQUESTOR (patron tablet) to display a QR code
 // that the waiter will scan.
+//
+// Flow:
+//   1. Patron enters table name → app generates QR code
+//   2. QR is displayed on screen
+//   3. A Supabase Realtime subscription listens for a new pairing
+//      row where requestor_id = this device's UUID
+//   4. When the waiter scans → pairing row is inserted in DB →
+//      Realtime fires → patron tablet redirects to /menu
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,6 +25,8 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useTheme } from '../../lib/ThemeContext';
 import { generatePairingCode } from '../../lib/pairingService';
+import { getDeviceId } from '../../lib/deviceService';
+import { supabase } from '../../lib/supabase';
 import type { GeneratePairingResult } from '../../lib/pairingService';
 
 export default function GeneratePairing() {
@@ -27,6 +37,67 @@ export default function GeneratePairing() {
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<GeneratePairingResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pairingDetected, setPairingDetected] = useState(false);
+
+  // Keep subscription ref so we can unsubscribe on unmount / reset
+  const subscriptionRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  // ── Subscribe to pairings for this device once QR is shown ────────────────
+  useEffect(() => {
+    if (!result) return; // only subscribe when QR is displayed
+
+    let cancelled = false;
+
+    const setupSubscription = async () => {
+      const deviceId = await getDeviceId();
+
+      // Clean up any old channel before creating a new one
+      if (subscriptionRef.current) {
+        await supabase.removeChannel(subscriptionRef.current);
+      }
+
+      const channel = supabase
+        .channel(`pairing-watch-${deviceId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'pairings',
+            filter: `requestor_id=eq.${deviceId}`,
+          },
+          (payload) => {
+            if (cancelled) return;
+            console.log('[GeneratePairing] Pairing detected:', payload.new);
+            setPairingDetected(true);
+
+            // Small delay so the patron sees the confirmation briefly
+            setTimeout(() => {
+              if (!cancelled) {
+                router.replace('/menu');
+              }
+            }, 1200);
+          }
+        )
+        .subscribe((status) => {
+          console.log('[GeneratePairing] Realtime status:', status);
+        });
+
+      subscriptionRef.current = channel;
+    };
+
+    setupSubscription();
+
+    return () => {
+      cancelled = true;
+      if (subscriptionRef.current) {
+        supabase.removeChannel(subscriptionRef.current);
+        subscriptionRef.current = null;
+      }
+    };
+  }, [result]); // re-subscribe whenever a new QR is generated
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleGenerate = async () => {
     if (!tableName.trim()) {
@@ -36,6 +107,7 @@ export default function GeneratePairing() {
 
     setIsLoading(true);
     setError(null);
+    setPairingDetected(false);
 
     try {
       const data = await generatePairingCode(tableName.trim());
@@ -48,13 +120,21 @@ export default function GeneratePairing() {
     }
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
+    // Unsubscribe before resetting so old listener doesn't fire
+    if (subscriptionRef.current) {
+      await supabase.removeChannel(subscriptionRef.current);
+      subscriptionRef.current = null;
+    }
     setResult(null);
     setTableName('');
     setError(null);
+    setPairingDetected(false);
   };
 
   const styles = createStyles(theme.primaryColor, theme.borderRadius);
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <View style={[styles.container, { backgroundColor: theme.backgroundColor }]}>
@@ -73,39 +153,63 @@ export default function GeneratePairing() {
         {result ? (
           /* ── QR Code display ── */
           <View style={styles.qrSection}>
-            <Text style={[styles.subtitle, { color: theme.textColor, fontFamily: theme.fontFamily }]}>
-              Show this QR code to your waiter
-            </Text>
+            {pairingDetected ? (
+              /* Waiter has scanned — show confirmation before redirect */
+              <View style={styles.successBox}>
+                <Text style={styles.successIcon}>✅</Text>
+                <Text style={[styles.successTitle, { color: theme.primaryColor }]}>
+                  Waiter Connected!
+                </Text>
+                <Text style={[styles.successSub, { color: theme.textColor }]}>
+                  Taking you to the menu…
+                </Text>
+                <ActivityIndicator color={theme.primaryColor} style={{ marginTop: 12 }} />
+              </View>
+            ) : (
+              <>
+                <Text style={[styles.subtitle, { color: theme.textColor, fontFamily: theme.fontFamily }]}>
+                  Show this QR code to your waiter
+                </Text>
 
-            <View style={styles.qrCard}>
-              <Image
-                source={{
-                  uri: `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(result.qrData)}`,
-                }}
-                style={styles.qrImage}
-                contentFit="contain"
-              />
-            </View>
+                <View style={styles.qrCard}>
+                  <Image
+                    source={{
+                      uri: `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(result.qrData)}`,
+                    }}
+                    style={styles.qrImage}
+                    contentFit="contain"
+                  />
+                </View>
 
-            <View style={[styles.codeBox, { borderColor: theme.primaryColor }]}>
-              <Text style={[styles.codeLabel, { color: theme.textColor }]}>Code</Text>
-              <Text style={[styles.codeValue, { color: theme.primaryColor, fontFamily: theme.fontFamily }]}>
-                {result.code}
-              </Text>
-            </View>
+                <View style={[styles.codeBox, { borderColor: theme.primaryColor }]}>
+                  <Text style={[styles.codeLabel, { color: theme.textColor }]}>Code</Text>
+                  <Text style={[styles.codeValue, { color: theme.primaryColor, fontFamily: theme.fontFamily }]}>
+                    {result.code}
+                  </Text>
+                </View>
 
-            <Text style={[styles.expiry, { color: theme.textColor }]}>
-              Expires in 2 hours
-            </Text>
+                <Text style={[styles.expiry, { color: theme.textColor }]}>
+                  Expires in 2 hours • Waiting for waiter to scan…
+                </Text>
 
-            <TouchableOpacity
-              style={[styles.secondaryBtn, { borderColor: theme.primaryColor }]}
-              onPress={handleReset}
-            >
-              <Text style={[styles.secondaryBtnText, { color: theme.primaryColor }]}>
-                Generate New Code
-              </Text>
-            </TouchableOpacity>
+                {/* Pulsing indicator to show we're listening */}
+                <View style={styles.waitingRow}>
+                  <ActivityIndicator size="small" color={theme.primaryColor} />
+                  <Text style={[styles.waitingText, { color: theme.textColor }]}>
+                    Waiting for waiter to scan
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.secondaryBtn, { borderColor: theme.primaryColor }]}
+                  onPress={handleReset}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: theme.primaryColor }]}>
+                    Generate New Code
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         ) : (
           /* ── Table name input ── */
@@ -199,7 +303,17 @@ function createStyles(primaryColor: string, borderRadius: number) {
     },
     codeLabel: { fontSize: 12, marginBottom: 4 },
     codeValue: { fontSize: 28, fontWeight: 'bold', letterSpacing: 6 },
-    expiry: { fontSize: 13, fontStyle: 'italic', opacity: 0.7 },
+    expiry: { fontSize: 13, fontStyle: 'italic', opacity: 0.7, textAlign: 'center' },
+    waitingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      backgroundColor: '#f0f4ff',
+      borderRadius: 20,
+    },
+    waitingText: { fontSize: 13 },
     secondaryBtn: {
       borderWidth: 2,
       borderRadius: 8,
@@ -207,6 +321,12 @@ function createStyles(primaryColor: string, borderRadius: number) {
       paddingVertical: 12,
     },
     secondaryBtnText: { fontSize: 15, fontWeight: '600' },
+
+    // Success state
+    successBox: { alignItems: 'center', gap: 12, paddingVertical: 40 },
+    successIcon: { fontSize: 56 },
+    successTitle: { fontSize: 24, fontWeight: 'bold', textAlign: 'center' },
+    successSub: { fontSize: 16, textAlign: 'center', opacity: 0.7 },
 
     // Input section
     inputSection: { gap: 12 },

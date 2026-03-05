@@ -168,7 +168,7 @@ export async function getActivePairingId(): Promise<string | null> {
   const { data } = await supabase
     .from('pairings')
     .select('id')
-    .eq('requestor_device_id', deviceId)
+    .eq('requestor_id', deviceId)
     .eq('is_active', true)
     .maybeSingle();
   return data?.id ?? null;

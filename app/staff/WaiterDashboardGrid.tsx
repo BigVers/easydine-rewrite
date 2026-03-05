@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import {
   getWaiterGridRows,
   markActioned,
@@ -33,6 +34,7 @@ const TYPE_LABELS: Record<NotificationType, string> = {
 
 export default function WaiterDashboardGrid() {
   const { theme } = useTheme();
+  const router = useRouter();
   const [rows, setRows] = useState<WaiterGridRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -123,14 +125,39 @@ export default function WaiterDashboardGrid() {
 
   if (isLoading) {
     return (
-      <View style={[styles.centered, { backgroundColor: theme.backgroundColor }]}>
-        <ActivityIndicator size="large" color={theme.primaryColor} />
+      <View style={{ flex: 1, backgroundColor: theme.backgroundColor }}>
+        <View style={[styles.dashHeader, { borderBottomColor: theme.primaryColor }]}>
+          <Text style={[styles.dashTitle, { color: theme.textColor }]}>Waiter Dashboard</Text>
+          <TouchableOpacity
+            style={[styles.scanBtn, { backgroundColor: theme.primaryColor }]}
+            onPress={() => router.push('/pairing/PairDevices')}
+          >
+            <Text style={styles.scanBtnText}>📷  Scan QR</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={[styles.centered, { flex: 1 }]}>
+          <ActivityIndicator size="large" color={theme.primaryColor} />
+        </View>
       </View>
     );
   }
 
   return (
-    <ScrollView
+    <View style={{ flex: 1, backgroundColor: theme.backgroundColor }}>
+      {/* ── Header with Scan button ─────────────────────────────── */}
+      <View style={[styles.dashHeader, { borderBottomColor: theme.primaryColor }]}>
+        <Text style={[styles.dashTitle, { color: theme.textColor }]}>
+          Waiter Dashboard
+        </Text>
+        <TouchableOpacity
+          style={[styles.scanBtn, { backgroundColor: theme.primaryColor }]}
+          onPress={() => router.push('/pairing/PairDevices')}
+        >
+          <Text style={styles.scanBtnText}>📷  Scan QR</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
       style={{ backgroundColor: theme.backgroundColor }}
       contentContainerStyle={styles.container}
       refreshControl={
@@ -219,7 +246,8 @@ export default function WaiterDashboardGrid() {
           ))
         )}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -227,6 +255,24 @@ const styles = StyleSheet.create({
   container: { padding: 16, paddingBottom: 32 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   table: { minWidth: 640 },
+
+  dashHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 2,
+  },
+  dashTitle: { fontSize: 18, fontWeight: '700' },
+  scanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+  },
+  scanBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 8 },
   headerRow: { borderBottomWidth: 2, marginBottom: 4 },

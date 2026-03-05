@@ -21,6 +21,7 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '../../lib/ThemeContext';
 import { pairWithRequestor, parseQRData } from '../../lib/pairingService';
 import { registerDevice } from '../../lib/deviceService';
+import { supabase } from '../../lib/supabase';
 
 type ScanMode = 'scan' | 'manual' | null;
 
@@ -90,15 +91,30 @@ export default function PairDevices() {
       // Ensure this device is registered as a receiver before pairing
       await registerDevice({ deviceType: 'receiver', deviceName: 'Waiter Device' });
 
-      const parsed = requestorId
-        ? { code, requestorId }
-        : { code, requestorId: '' };
+      // For manual entry (no QR), look up the requestor ID from the pairing_codes table
+      let resolvedRequestorId = requestorId;
+      if (!resolvedRequestorId) {
+        const { data: codeRow, error: codeErr } = await supabase
+          .from('pairing_codes')
+          .select('requestor_id')
+          .eq('code', code)
+          .eq('is_used', false)
+          .gt('expires_at', new Date().toISOString())
+          .maybeSingle();
 
-      // For manual entry the requestorId comes from the pairing_code row (handled server-side)
-      const result = await pairWithRequestor(
-        requestorId ? parsed : { code, requestorId: '__manual__' }
-      );
+        if (codeErr || !codeRow) {
+          throw new Error('This code is invalid or has expired. Please ask for a new QR code.');
+        }
+        resolvedRequestorId = codeRow.requestor_id;
+      }
 
+      // At this point we must have a valid requestorId
+      if (!resolvedRequestorId) {
+        throw new Error('Unable to resolve the requestor for this pairing code.');
+      }
+
+      await pairWithRequestor({ code, requestorId: resolvedRequestorId });
+      // Receiver (waiter) goes to notifications, which renders WaiterDashboardGrid
       router.replace('/notifications');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Pairing failed. Please try again.';

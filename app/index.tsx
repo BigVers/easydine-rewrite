@@ -13,9 +13,10 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 
 import { useTheme } from '../lib/ThemeContext';
+import { useAuth } from '../lib/AuthContext';
 import { sendNotification } from '../lib/notificationService';
 import { getActivePairingId } from '../lib/pairingService';
 
@@ -53,6 +54,14 @@ const SERVICE_BUTTONS = [
 export default function HomeScreen() {
   const router = useRouter();
   const { theme } = useTheme();
+  const { session, profile, isLoading: authLoading } = useAuth();
+
+  // Declarative auth guard — staff members who are logged in go to /notifications.
+  // Using <Redirect /> instead of router.replace() avoids the SceneView crash
+  // that occurs when the navigator hasn't finished mounting yet.
+  if (!authLoading && session && profile) {
+    return <Redirect href="/notifications" />;
+  }
 
   const [pairingId, setPairingId] = useState<string | null>(null);
   const [isPairingLoading, setIsPairingLoading] = useState(true);
@@ -150,6 +159,21 @@ export default function HomeScreen() {
         )}
       </View>
 
+      {/* Scan QR — waiter scans patron's code (receiver side) */}
+      <TouchableOpacity
+        style={[
+          styles.scanBtn,
+          { borderColor: theme.primaryColor, borderRadius: theme.borderRadius },
+        ]}
+        onPress={() => router.push('/pairing/PairDevices')}
+      >
+        <Text style={styles.scanBtnIcon}>📷</Text>
+        <View>
+          <Text style={[styles.scanBtnLabel, { color: theme.primaryColor }]}>Scan QR Code</Text>
+          <Text style={[styles.scanBtnSub, { color: theme.textColor }]}>Pair with a patron table</Text>
+        </View>
+      </TouchableOpacity>
+
       {/* Order food — primary action */}
       <TouchableOpacity
         style={[
@@ -210,6 +234,18 @@ function createStyles(primaryColor: string, borderRadius: number) {
     statusDot: { fontSize: 20 },
     statusText: { fontSize: 14, flex: 1 },
     pairLink: { fontSize: 14, fontWeight: '600', marginTop: 4 },
+
+    scanBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 16,
+      padding: 18,
+      borderWidth: 1.5,
+      backgroundColor: '#fff',
+    },
+    scanBtnIcon: { fontSize: 32 },
+    scanBtnLabel: { fontSize: 17, fontWeight: '700' },
+    scanBtnSub: { fontSize: 12, opacity: 0.6, marginTop: 2 },
 
     orderBtn: {
       flexDirection: 'row',

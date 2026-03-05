@@ -1,99 +1,65 @@
 // app/_layout.tsx
 // Root navigator layout.
-// - Wraps everything in Auth + Theme providers.
-// - Guards staff routes behind login.
-// - Initialises OneSignal and registers the device.
+// - Wraps everything in Auth + AppTheme providers.
+// - Initialises OneSignal on mount.
+//
+// Auth redirects are handled declaratively inside each screen using
+// Expo Router's <Redirect /> component. This is the correct pattern for
+// Expo Router 4 and avoids the "right operand of 'in' is not an object"
+// crash that occurs when router.replace() is called imperatively before
+// the native stack navigator's SceneView has finished mounting.
 
 import { useEffect } from 'react';
-import { ActivityIndicator, View } from 'react-native';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack } from 'expo-router';
 import { Provider as PaperProvider } from 'react-native-paper';
 
-import { AuthProvider, useAuth } from '../lib/AuthContext';
-import { ThemeProvider } from '../lib/ThemeContext';
+// Aliased to avoid a naming clash with react-native-paper's own ThemeProvider.
+import { ThemeProvider as AppThemeProvider } from '../lib/ThemeContext';
+import { AuthProvider } from '../lib/AuthContext';
 import { initOneSignal, getPlayerId, requestPermission } from '../lib/oneSignalManager';
 import { registerDevice, saveOneSignalId } from '../lib/deviceService';
 
-// ─── OneSignal bootstrap ─────────────────────────────────────────────────────
+// ─── OneSignal bootstrap ──────────────────────────────────────────────────────
 
-async function bootstrapOneSignal(branchId?: string) {
-  initOneSignal();
-  await requestPermission();
-
-  const playerId = await getPlayerId();
-  if (playerId) {
-    await saveOneSignalId(playerId);
+async function bootstrapOneSignal() {
+  try {
+    initOneSignal();
+    await requestPermission();
+    const playerId = await getPlayerId();
+    if (playerId) await saveOneSignalId(playerId);
+    await registerDevice({
+      deviceType: 'receiver',
+      deviceName: 'EasyDine Device',
+      onesignalUserId: playerId ?? undefined,
+    });
+  } catch (err) {
+    console.warn('[layout] OneSignal bootstrap error:', err);
   }
-
-  // Keep device record current
-  await registerDevice({
-    deviceType: 'receiver',  // Default; overridden during pairing
-    deviceName: 'EasyDine Device',
-    branchId,
-    onesignalUserId: playerId ?? undefined,
-  });
 }
 
-// ─── Auth guard ───────────────────────────────────────────────────────────────
-
-function RootLayoutContent() {
-  const { session, profile, isLoading } = useAuth();
-  const router = useRouter();
-  const segments = useSegments();
-
-  // Bootstrap OneSignal once (non-blocking)
-  useEffect(() => {
-    bootstrapOneSignal(profile?.branch_id ?? undefined).catch(
-      (err) => console.warn('[layout] OneSignal bootstrap error:', err)
-    );
-  }, [profile?.branch_id]);
-
-  // Auth routing guard
-  useEffect(() => {
-    if (isLoading) return;
-    const onLoginPage = segments[0] === 'login';
-    const isAuthenticated = Boolean(session && profile);
-
-    if (!isAuthenticated && !onLoginPage) {
-      router.replace('/login');
-    } else if (isAuthenticated && onLoginPage) {
-      router.replace('/');
-    }
-  }, [isLoading, session, profile, segments, router]);
-
-  if (isLoading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
-
-  return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="login" />
-      <Stack.Screen name="index" />
-      <Stack.Screen name="menu" />
-      <Stack.Screen name="pairing" />
-      <Stack.Screen name="notifications" />
-      <Stack.Screen name="staff" />
-    </Stack>
-  );
-}
-
-// ─── Providers ───────────────────────────────────────────────────────────────
+// ─── Root layout ──────────────────────────────────────────────────────────────
 
 export default function RootLayout() {
-  // branchId is resolved inside ThemeProvider from the env config
   const BRANCH_ID = process.env.EXPO_PUBLIC_BRANCH_ID ?? '';
+
+  useEffect(() => {
+    bootstrapOneSignal();
+  }, []);
 
   return (
     <AuthProvider>
-      <ThemeProvider branchId={BRANCH_ID}>
+      <AppThemeProvider branchId={BRANCH_ID}>
         <PaperProvider>
-          <RootLayoutContent />
+          {/*
+           * Self-closing <Stack /> with only global screenOptions.
+           * Expo Router auto-discovers every file under app/ — do not list
+           * Stack.Screen entries for folder routes unless you need per-screen
+           * options. If you do list them, use the segment name only
+           * (e.g. "menu") — never the file path (e.g. "menu/index").
+           */}
+          <Stack screenOptions={{ headerShown: false }} />
         </PaperProvider>
-      </ThemeProvider>
+      </AppThemeProvider>
     </AuthProvider>
   );
 }

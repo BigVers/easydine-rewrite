@@ -14,12 +14,18 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Redirect } from 'expo-router';
 import { useTheme } from '../lib/ThemeContext';
 import { useAuth } from '../lib/AuthContext';
 
 export default function LoginScreen() {
   const { theme } = useTheme();
-  const { signIn } = useAuth();
+  const { signIn, session, profile, isLoading: authLoading } = useAuth();
+
+  // If already authenticated, redirect to home instead of showing login.
+  if (!authLoading && session && profile) {
+    return <Redirect href="/" />;
+  }
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
