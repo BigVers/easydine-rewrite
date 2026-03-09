@@ -20,7 +20,8 @@ import { useRouter } from 'expo-router';
 
 import { useTheme } from '../../lib/ThemeContext';
 import { pairWithRequestor, parseQRData } from '../../lib/pairingService';
-import { registerDevice } from '../../lib/deviceService';
+import { registerDevice, saveOneSignalId } from '../../lib/deviceService';
+import { waitForPlayerId } from '../../lib/oneSignalManager';
 import { supabase } from '../../lib/supabase';
 
 type ScanMode = 'scan' | 'manual' | null;
@@ -33,6 +34,7 @@ export default function PairDevices() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const [scanMode, setScanMode] = useState<ScanMode>(null);
+
   const [manualCode, setManualCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +92,18 @@ export default function PairDevices() {
     try {
       // Ensure this device is registered as a receiver before pairing
       await registerDevice({ deviceType: 'receiver', deviceName: 'Waiter Device' });
+
+      // Wait for OneSignal subscription ID to be available and saved to DB
+      // before completing the pairing — the Edge Function needs it to deliver push.
+      console.log('[PairDevices] Waiting for OneSignal subscription ID...');
+      const playerId = await waitForPlayerId(10000);
+      if (playerId) {
+        console.log('[PairDevices] ✅ OneSignal ID confirmed, saving to DB:', playerId);
+        await saveOneSignalId(playerId);
+        console.log('[PairDevices] ✅ OneSignal ID saved — push notifications will work');
+      } else {
+        console.warn('[PairDevices] ⚠️ OneSignal ID timed out — check FCM/OneSignal setup');
+      }
 
       // For manual entry (no QR), look up the requestor ID from the pairing_codes table
       let resolvedRequestorId = requestorId;

@@ -25,7 +25,7 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useTheme } from '../../lib/ThemeContext';
 import { generatePairingCode } from '../../lib/pairingService';
-import { getDeviceId } from '../../lib/deviceService';
+import { getDeviceId, registerDevice } from '../../lib/deviceService';
 import { supabase } from '../../lib/supabase';
 import type { GeneratePairingResult } from '../../lib/pairingService';
 
@@ -110,6 +110,8 @@ export default function GeneratePairing() {
     setPairingDetected(false);
 
     try {
+      // Ensure this device is registered as a requestor (patron tablet)
+      await registerDevice({ deviceType: 'requestor', deviceName: 'Patron Tablet' });
       const data = await generatePairingCode(tableName.trim());
       setResult(data);
     } catch (err) {

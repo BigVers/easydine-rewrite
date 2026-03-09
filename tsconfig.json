@@ -3,8 +3,9 @@
   "compilerOptions": {
     "strict": true,
     "skipLibCheck": true,
-    "types": ["node"],
     "jsx": "react-native",
+    "types": ["node"],
+    "typeRoots": ["node_modules/@types"],
     "paths": {
       "@/*": [
         "./*"

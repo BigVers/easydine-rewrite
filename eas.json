@@ -6,13 +6,22 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_ONESIGNAL_APP_ID": "18516768-760d-4335-966f-efabc39d1610"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_ONESIGNAL_APP_ID": "18516768-760d-4335-966f-efabc39d1610"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_ONESIGNAL_APP_ID": "18516768-760d-4335-966f-efabc39d1610"
+      }
     },
     "development-simulator": {
       "developmentClient": true,

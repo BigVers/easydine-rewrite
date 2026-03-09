@@ -1,4 +1,4 @@
-﻿{
+{
   "expo": {
     "name": "EasyDine",
     "slug": "easydine",
@@ -21,18 +21,40 @@
         "android.permission.VIBRATE",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "googleServicesFile": "./google-services.json"
     },
     "plugins": [
       "expo-router",
-      ["expo-build-properties", { "android": { "kotlinVersion": "1.9.25" } }],
-      ["onesignal-expo-plugin", { "mode": "production" }],
-      ["expo-camera", { "cameraPermission": "EasyDine uses the camera to scan QR pairing codes." }]
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ],
+      [
+        "onesignal-expo-plugin",
+        {
+          "mode": "production"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "EasyDine uses the camera to scan QR pairing codes."
+        }
+      ]
     ],
     "scheme": "easydine",
     "extra": {
-      "router": { "origin": false },
-      "eas": { "projectId": "fa97062e-ee0b-4bdc-a739-8d6a1586518d" }
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "fa97062e-ee0b-4bdc-a739-8d6a1586518d"
+      }
     },
     "owner": "1208mpho"
   }

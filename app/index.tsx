@@ -1,7 +1,5 @@
 // app/index.tsx
 // Patron home screen (requestor device).
-// Shows service request buttons: Call Waiter, Order Food, Request Condiments, Request Bill.
-// Also shows pairing status and navigates to the menu.
 
 import React, { useEffect, useState } from 'react';
 import {
@@ -19,8 +17,6 @@ import { useTheme } from '../lib/ThemeContext';
 import { useAuth } from '../lib/AuthContext';
 import { sendNotification } from '../lib/notificationService';
 import { getActivePairingId } from '../lib/pairingService';
-
-// ─── Service button config ────────────────────────────────────────────────────
 
 const SERVICE_BUTTONS = [
   {
@@ -49,31 +45,27 @@ const SERVICE_BUTTONS = [
   },
 ] as const;
 
-// ─── Component ───────────────────────────────────────────────────────────────
-
 export default function HomeScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const { session, profile, isLoading: authLoading } = useAuth();
 
-  // Declarative auth guard — staff members who are logged in go to /notifications.
-  // Using <Redirect /> instead of router.replace() avoids the SceneView crash
-  // that occurs when the navigator hasn't finished mounting yet.
-  if (!authLoading && session && profile) {
-    return <Redirect href="/notifications" />;
-  }
-
+  // ✅ All hooks BEFORE any conditional return (Rules of Hooks)
   const [pairingId, setPairingId] = useState<string | null>(null);
   const [isPairingLoading, setIsPairingLoading] = useState(true);
   const [sendingId, setSendingId] = useState<string | null>(null);
 
-  // Check pairing status on mount
   useEffect(() => {
     getActivePairingId().then((id) => {
       setPairingId(id);
       setIsPairingLoading(false);
     });
   }, []);
+
+  // Declarative auth guard — AFTER all hooks
+  if (!authLoading && session && profile) {
+    return <Redirect href="/notifications" />;
+  }
 
   const requiresPairing = () => {
     if (!pairingId) {
@@ -92,7 +84,6 @@ export default function HomeScreen() {
 
   const handleServiceRequest = async (btn: typeof SERVICE_BUTTONS[number]) => {
     if (requiresPairing()) return;
-
     setSendingId(btn.id);
     try {
       await sendNotification({
@@ -102,7 +93,7 @@ export default function HomeScreen() {
         metadata: {},
       });
       Alert.alert('Sent!', `${btn.label} request sent to your waiter.`);
-    } catch (err) {
+    } catch {
       Alert.alert('Error', 'Could not send request. Please try again.');
     } finally {
       setSendingId(null);
@@ -121,7 +112,6 @@ export default function HomeScreen() {
       style={{ backgroundColor: theme.backgroundColor }}
       contentContainerStyle={styles.container}
     >
-      {/* Brand header */}
       <View style={styles.brandHeader}>
         <Text style={[styles.welcome, { color: theme.textColor, fontFamily: theme.fontFamily }]}>
           Welcome
@@ -159,12 +149,9 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Scan QR — waiter scans patron's code (receiver side) */}
+      {/* Scan QR — waiter scans patron's code */}
       <TouchableOpacity
-        style={[
-          styles.scanBtn,
-          { borderColor: theme.primaryColor, borderRadius: theme.borderRadius },
-        ]}
+        style={[styles.scanBtn, { borderColor: theme.primaryColor, borderRadius: theme.borderRadius }]}
         onPress={() => router.push('/pairing/PairDevices')}
       >
         <Text style={styles.scanBtnIcon}>📷</Text>
@@ -174,12 +161,9 @@ export default function HomeScreen() {
         </View>
       </TouchableOpacity>
 
-      {/* Order food — primary action */}
+      {/* Order food */}
       <TouchableOpacity
-        style={[
-          styles.orderBtn,
-          { backgroundColor: theme.primaryColor, borderRadius: theme.borderRadius },
-        ]}
+        style={[styles.orderBtn, { backgroundColor: theme.primaryColor, borderRadius: theme.borderRadius }]}
         onPress={handleOrderFood}
       >
         <Text style={styles.orderBtnIcon}>🍽️</Text>
@@ -189,7 +173,7 @@ export default function HomeScreen() {
         </View>
       </TouchableOpacity>
 
-      {/* Service request buttons */}
+      {/* Quick requests */}
       <Text style={[styles.sectionTitle, { color: theme.textColor }]}>Quick Requests</Text>
       <View style={styles.grid}>
         {SERVICE_BUTTONS.map((btn) => (
@@ -223,50 +207,29 @@ function createStyles(primaryColor: string, borderRadius: number) {
     tagline: { fontSize: 16, opacity: 0.7, marginTop: 4 },
 
     statusCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      padding: 16,
-      borderRadius: 12,
-      borderWidth: 1.5,
-      backgroundColor: '#fff',
+      flexDirection: 'row', alignItems: 'center', gap: 12,
+      padding: 16, borderRadius: 12, borderWidth: 1.5, backgroundColor: '#fff',
     },
     statusDot: { fontSize: 20 },
     statusText: { fontSize: 14, flex: 1 },
     pairLink: { fontSize: 14, fontWeight: '600', marginTop: 4 },
 
     scanBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 16,
-      padding: 18,
-      borderWidth: 1.5,
-      backgroundColor: '#fff',
+      flexDirection: 'row', alignItems: 'center', gap: 16,
+      padding: 18, borderWidth: 1.5, backgroundColor: '#fff',
     },
     scanBtnIcon: { fontSize: 32 },
     scanBtnLabel: { fontSize: 17, fontWeight: '700' },
     scanBtnSub: { fontSize: 12, opacity: 0.6, marginTop: 2 },
 
-    orderBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 16,
-      padding: 20,
-    },
+    orderBtn: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 20 },
     orderBtnIcon: { fontSize: 36 },
     orderBtnLabel: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
     orderBtnSub: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
 
     sectionTitle: { fontSize: 16, fontWeight: '700' },
     grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-    gridBtn: {
-      flex: 1,
-      minWidth: 140,
-      padding: 20,
-      alignItems: 'center',
-      borderWidth: 1.5,
-      gap: 8,
-    },
+    gridBtn: { flex: 1, minWidth: 140, padding: 20, alignItems: 'center', borderWidth: 1.5, gap: 8 },
     gridBtnIcon: { fontSize: 32 },
     gridBtnLabel: { fontSize: 14, fontWeight: '600', textAlign: 'center' },
   });

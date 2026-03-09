@@ -37,13 +37,28 @@ export async function sendNotification(
 
   if (insertError) throw insertError;
 
-  // Fire-and-forget: the Edge Function sends the actual push
-  // We don't await it so the patron's UI stays snappy
-  supabase.functions
-    .invoke('send-notification', {
+  // Awaited so Metro logs show the Edge Function result — helps diagnose push issues.
+  try {
+    const { data: fnData, error: fnError } = await supabase.functions.invoke('send-notification', {
       body: { notificationId: notification.id, pairingId: payload.pairingId },
-    })
-    .catch((err) => console.warn('[notificationService] Edge Function error:', err));
+    });
+    if (fnError) {
+      // Extract the actual response body from FunctionsHttpError
+      let detail = fnError.message;
+      try {
+        const ctx = (fnError as any).context;
+        if (ctx) {
+          const text = await ctx.text?.();
+          detail = text || detail;
+        }
+      } catch {}
+      console.warn('[notificationService] ❌ Edge Function error body:', detail);
+    } else {
+      console.log('[notificationService] ✅ Edge Function response:', JSON.stringify(fnData));
+    }
+  } catch (err) {
+    console.warn('[notificationService] ❌ Edge Function threw:', err);
+  }
 
   return notification as Notification;
 }

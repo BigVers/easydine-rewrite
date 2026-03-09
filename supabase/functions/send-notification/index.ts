@@ -1,52 +1,114 @@
 // supabase/functions/send-notification/index.ts
-// Edge Function: Sends a push notification via OneSignal.
-// This keeps the OneSignal REST API key server-side.
-//
-// Called by the client via supabase.functions.invoke('send-notification', { body })
+// Resolves receiver's OneSignal ID from DB then sends push via OneSignal REST API.
 
+/// <reference path="../deno.d.ts" />
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const ONESIGNAL_APP_ID = Deno.env.get('ONESIGNAL_APP_ID') ?? '';
-const ONESIGNAL_REST_API_KEY = Deno.env.get('ONESIGNAL_REST_API_KEY') ?? '';
+const ONESIGNAL_APP_ID       = Deno.env.get('ONESIGNAL_APP_ID') ?? '';
+const ONESIGNAL_REST_API_KEY  = Deno.env.get('ONESIGNAL_REST_API_KEY') ?? '';
+const SUPABASE_URL            = Deno.env.get('SUPABASE_URL') ?? '';
+const SUPABASE_SERVICE_KEY    = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
-interface NotificationPayload {
-  playerIds: string[];        // OneSignal player/subscription IDs
-  title: string;
-  body: string;
-  data?: Record<string, unknown>;
-}
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...CORS },
+  });
 
 serve(async (req: Request) => {
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      },
-    });
-  }
+  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
+  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   try {
-    if (req.method !== 'POST') {
-      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-        status: 405,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    const payload = await req.json();
+    const { notificationId, pairingId } = payload;
+
+    console.log('[send-notification] Received:', { notificationId, pairingId });
+
+    // ── Validate env vars ────────────────────────────────────────────────────
+    if (!ONESIGNAL_APP_ID)      { console.error('❌ ONESIGNAL_APP_ID not set');       return json({ error: 'ONESIGNAL_APP_ID secret missing' }, 500); }
+    if (!ONESIGNAL_REST_API_KEY){ console.error('❌ ONESIGNAL_REST_API_KEY not set'); return json({ error: 'ONESIGNAL_REST_API_KEY secret missing' }, 500); }
+    if (!SUPABASE_URL)          { console.error('❌ SUPABASE_URL not set');           return json({ error: 'SUPABASE_URL secret missing' }, 500); }
+    if (!SUPABASE_SERVICE_KEY)  { console.error('❌ SUPABASE_SERVICE_ROLE_KEY not set'); return json({ error: 'SUPABASE_SERVICE_ROLE_KEY secret missing' }, 500); }
+
+    if (!notificationId || !pairingId) {
+      console.error('❌ Missing notificationId or pairingId in request body');
+      return json({ error: 'notificationId and pairingId are required' }, 400);
     }
 
-    const payload: NotificationPayload = await req.json();
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-    if (!payload.playerIds?.length) {
-      return new Response(JSON.stringify({ error: 'playerIds is required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    // ── 1. Fetch notification ────────────────────────────────────────────────
+    const { data: notif, error: notifErr } = await supabase
+      .from('notifications')
+      .select('notification_type, message')
+      .eq('id', notificationId)
+      .single();
+
+    if (notifErr || !notif) {
+      console.error('❌ Notification not found:', notifErr);
+      return json({ error: 'Notification not found', detail: notifErr?.message }, 404);
+    }
+    console.log('[send-notification] Notification:', notif.notification_type, notif.message);
+
+    // ── 2. Fetch pairing → receiver_id ──────────────────────────────────────
+    const { data: pairing, error: pairingErr } = await supabase
+      .from('pairings')
+      .select('receiver_id, table_name')
+      .eq('id', pairingId)
+      .single();
+
+    if (pairingErr || !pairing) {
+      console.error('❌ Pairing not found:', pairingErr);
+      return json({ error: 'Pairing not found', detail: pairingErr?.message }, 404);
+    }
+    console.log('[send-notification] Receiver device ID:', pairing.receiver_id);
+
+    // ── 3. Fetch receiver's OneSignal subscription ID ────────────────────────
+    const { data: device, error: deviceErr } = await supabase
+      .from('devices')
+      .select('onesignal_user_id, device_name, device_type')
+      .eq('id', pairing.receiver_id)
+      .single();
+
+    if (deviceErr || !device) {
+      console.error('❌ Receiver device row not found:', deviceErr);
+      return json({ error: 'Receiver device not found', detail: deviceErr?.message }, 404);
     }
 
-    // Send via OneSignal REST API
-    const osResponse = await fetch('https://onesignal.com/api/v1/notifications', {
+    console.log('[send-notification] Device row:', {
+      type: device.device_type,
+      name: device.device_name,
+      onesignal_user_id: device.onesignal_user_id ?? 'NULL ← push will be skipped!',
+    });
+
+    if (!device.onesignal_user_id) {
+      console.warn('⚠️  onesignal_user_id is NULL — receiver never saved their subscription ID. Push skipped.');
+      return json({ success: false, reason: 'no_onesignal_id', receiver_id: pairing.receiver_id });
+    }
+
+    // ── 4. Build notification content ────────────────────────────────────────
+    const TITLES: Record<string, string> = {
+      NEW_ORDER:         '🍽️ New Order',
+      BILL_REQUEST:      '🧾 Bill Requested',
+      WAITER_REQUEST:    '🙋 Waiter Needed',
+      CONDIMENT_REQUEST: '🧂 Condiments Requested',
+      ORDER_UPDATE:      '📝 Order Update',
+    };
+    const title = TITLES[notif.notification_type] ?? 'EasyDine Request';
+    const body  = `${pairing.table_name}: ${notif.message}`;
+
+    console.log('[send-notification] Sending push:', { title, body, subscriptionId: device.onesignal_user_id });
+
+    // ── 5. Call OneSignal REST API ────────────────────────────────────────────
+    const osRes = await fetch('https://onesignal.com/api/v1/notifications', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -54,35 +116,27 @@ serve(async (req: Request) => {
       },
       body: JSON.stringify({
         app_id: ONESIGNAL_APP_ID,
-        include_player_ids: payload.playerIds,
-        headings: { en: payload.title },
-        contents: { en: payload.body },
-        data: payload.data ?? {},
-        // Ensure delivery even when app is backgrounded
+        include_subscription_ids: [device.onesignal_user_id],
+        headings: { en: title },
+        contents: { en: body },
+        data: { notificationId, pairingId },
         priority: 10,
-        android_channel_id: 'easydine-requests',
       }),
     });
 
-    const osData = await osResponse.json();
+    const osData = await osRes.json();
+    console.log('[send-notification] OneSignal response:', osRes.status, JSON.stringify(osData));
 
-    if (!osResponse.ok) {
-      console.error('[send-notification] OneSignal error:', osData);
-      return new Response(
-        JSON.stringify({ error: 'OneSignal API error', details: osData }),
-        { status: 502, headers: { 'Content-Type': 'application/json' } }
-      );
+    if (!osRes.ok) {
+      console.error('❌ OneSignal API error:', osData);
+      return json({ error: 'OneSignal API error', details: osData }, 502);
     }
 
-    return new Response(
-      JSON.stringify({ success: true, id: osData.id }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+    console.log('✅ Push sent successfully. OneSignal notification ID:', osData.id);
+    return json({ success: true, onesignalId: osData.id });
+
   } catch (err) {
     console.error('[send-notification] Unexpected error:', err);
-    return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return json({ error: 'Internal server error', detail: String(err) }, 500);
   }
 });
