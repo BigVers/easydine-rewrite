@@ -1,10 +1,14 @@
 // app/login.tsx
 // Staff login screen (waiters, managers, admins).
-// Patrons do NOT log in — they just use the app directly.
+// Shows the restaurant logo from restaurant_customisations when available.
+// Patrons do NOT log in — they use the app as a guest (requestor device).
+//
+// On successful login: all staff roles → /notifications (WaiterDashboardGrid)
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -14,36 +18,35 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Redirect } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { useTheme } from '../lib/ThemeContext';
 import { useAuth } from '../lib/AuthContext';
 
 export default function LoginScreen() {
+  const router = useRouter();
   const { theme } = useTheme();
   const { signIn, session, profile, isLoading: authLoading } = useAuth();
-
-  // If already authenticated, redirect to home instead of showing login.
-  if (!authLoading && session && profile) {
-    return <Redirect href="/" />;
-  }
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // If already authenticated redirect to the staff dashboard
+  if (!authLoading && session && profile) {
+    return <Redirect href="/notifications" />;
+  }
+
   const handleLogin = async () => {
     if (!email.trim() || !password) {
       setError('Please enter your email and password.');
       return;
     }
-
     setIsLoading(true);
     setError(null);
-
     try {
       await signIn(email.trim(), password);
-      // Auth context will redirect via _layout.tsx auth guard
+      router.replace('/notifications');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Login failed. Please try again.';
       setError(msg);
@@ -52,7 +55,10 @@ export default function LoginScreen() {
     }
   };
 
-  const styles = createStyles(theme.primaryColor, theme.borderRadius);
+  const styles = useMemo(
+    () => createStyles(theme.primaryColor, theme.borderRadius),
+    [theme.primaryColor, theme.borderRadius]
+  );
 
   return (
     <KeyboardAvoidingView
@@ -60,16 +66,24 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Logo / brand */}
+        {/* ── Brand header ── */}
         <View style={styles.brand}>
-          <Text style={[styles.logo, { color: theme.primaryColor }]}>🍽️</Text>
+          {theme.logoUrl ? (
+            <Image
+              source={{ uri: theme.logoUrl }}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+          ) : (
+            <Text style={[styles.logoEmoji, { color: theme.primaryColor }]}>🍽️</Text>
+          )}
           <Text style={[styles.appName, { color: theme.textColor, fontFamily: theme.fontFamily }]}>
             EasyDine
           </Text>
           <Text style={[styles.subtitle, { color: theme.textColor }]}>Staff Login</Text>
         </View>
 
-        {/* Form */}
+        {/* ── Form ── */}
         <View style={styles.form}>
           <Text style={[styles.label, { color: theme.textColor }]}>Email</Text>
           <TextInput
@@ -130,7 +144,12 @@ function createStyles(primaryColor: string, borderRadius: number) {
     content: { flexGrow: 1, justifyContent: 'center', padding: 32, gap: 24 },
 
     brand: { alignItems: 'center', gap: 8 },
-    logo: { fontSize: 56 },
+    logo: {
+      width: 100,
+      height: 100,
+      borderRadius: 12,
+    },
+    logoEmoji: { fontSize: 56 },
     appName: { fontSize: 32, fontWeight: 'bold' },
     subtitle: { fontSize: 16, opacity: 0.7 },
 

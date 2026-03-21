@@ -43,7 +43,6 @@ export async function sendNotification(
       body: { notificationId: notification.id, pairingId: payload.pairingId },
     });
     if (fnError) {
-      // Extract the actual response body from FunctionsHttpError
       let detail = fnError.message;
       try {
         const ctx = (fnError as any).context;
@@ -66,46 +65,46 @@ export async function sendNotification(
 // ── Reading (on waiter device / receiver) ────────────────────────────────────
 
 /**
- * Fetches all active pairings for the current waiter device,
- * grouped with their latest notification, formatted for the dashboard grid.
+ * Fetches all active pairings for the current waiter device together with
+ * the latest notification for each, using the `latest_notification_per_pairing`
+ * Postgres view (DISTINCT ON pairing_id ORDER BY created_at DESC).
+ *
+ * This replaces the previous pattern of fetching all historical notifications
+ * and grouping them in JavaScript, avoiding unnecessary data transfer.
  */
 export async function getWaiterGridRows(): Promise<WaiterGridRow[]> {
   const receiverId = await getDeviceId();
 
-  const { data: pairings, error: pairingError } = await supabase
+  // Single query: join active pairings with the latest-notification view.
+  // Supabase PostgREST supports joining views as if they were tables.
+  const { data, error } = await supabase
     .from('pairings')
-    .select('id, requestor_id, table_name')
+    .select(
+      `id,
+       table_name,
+       latest_notification_per_pairing (
+         notification_id,
+         notification_type,
+         message,
+         is_actioned
+       )`
+    )
     .eq('receiver_id', receiverId)
     .eq('is_active', true);
 
-  if (pairingError) throw pairingError;
-  if (!pairings?.length) return [];
+  if (error) throw error;
+  if (!data?.length) return [];
 
-  const pairingIds = pairings.map((p) => p.id);
+  return data.map((p): WaiterGridRow => {
+    // PostgREST returns the joined view row as an object (or null if no notifications yet)
+    const latest = Array.isArray(p.latest_notification_per_pairing)
+      ? p.latest_notification_per_pairing[0] ?? null
+      : (p.latest_notification_per_pairing as any) ?? null;
 
-  // Fetch latest notification per pairing (ordered by created_at desc)
-  const { data: notifications, error: notifError } = await supabase
-    .from('notifications')
-    .select('id, pairing_id, notification_type, message, is_actioned, created_at')
-    .in('pairing_id', pairingIds)
-    .order('created_at', { ascending: false });
-
-  if (notifError) throw notifError;
-
-  // Group notifications by pairing, keep only the most recent per pairing
-  const latestByPairing = new Map<string, (typeof notifications)[0]>();
-  (notifications ?? []).forEach((n) => {
-    if (!latestByPairing.has(n.pairing_id)) {
-      latestByPairing.set(n.pairing_id, n);
-    }
-  });
-
-  return pairings.map((p): WaiterGridRow => {
-    const latest = latestByPairing.get(p.id) ?? null;
     return {
       pairingId: p.id,
       tableName: p.table_name,
-      latestNotificationId: latest?.id ?? null,
+      latestNotificationId: latest?.notification_id ?? null,
       notificationType: (latest?.notification_type as NotificationType) ?? null,
       requestMade: latest?.message ?? '—',
       isActioned: latest?.is_actioned ?? true,
@@ -134,7 +133,13 @@ export async function markActioned(notificationId: string): Promise<void> {
 export type NotificationCallback = (row: WaiterGridRow) => void;
 
 /**
- * Subscribes to new notifications for the current receiver's active pairings.
+ * Subscribes to new notification INSERTs scoped to this waiter's active
+ * pairing IDs via a server-side Realtime filter.
+ *
+ * Using `pairing_id=in.(id1,id2,...)` as the filter pushes the scoping
+ * work to Postgres, so only matching rows are sent over the wire —
+ * consistent with how GeneratePairing.tsx filters requestor pairings.
+ *
  * Returns an unsubscribe function.
  */
 export function subscribeToWaiterNotifications(
@@ -142,6 +147,9 @@ export function subscribeToWaiterNotifications(
   onNew: NotificationCallback
 ): () => void {
   if (!pairingIds.length) return () => {};
+
+  // Build a server-side IN filter: pairing_id=in.(uuid1,uuid2,...)
+  const filter = `pairing_id=in.(${pairingIds.join(',')})`;
 
   const channel = supabase
     .channel(`waiter-notifications-${Date.now()}`)
@@ -151,12 +159,12 @@ export function subscribeToWaiterNotifications(
         event: 'INSERT',
         schema: 'public',
         table: 'notifications',
+        filter,                       // ← server-side scoping, not client-side
       },
       async (payload) => {
         const row = payload.new as Notification;
-        if (!pairingIds.includes(row.pairing_id)) return;
 
-        // Fetch table_name from the pairing
+        // Fetch table_name from the pairing (needed for the grid row)
         const { data: pairing } = await supabase
           .from('pairings')
           .select('table_name')
@@ -173,7 +181,10 @@ export function subscribeToWaiterNotifications(
         });
       }
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      if (err) console.warn('[notificationService] Realtime error:', err);
+      console.log('[notificationService] Realtime status:', status);
+    });
 
   return () => {
     supabase.removeChannel(channel);

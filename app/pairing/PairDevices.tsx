@@ -4,7 +4,7 @@
 //
 // On success → redirected to the notification dashboard.
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -141,7 +141,10 @@ export default function PairDevices() {
 
   // ── Styles ────────────────────────────────────────────────────────────────
 
-  const styles = createStyles(theme.primaryColor, theme.borderRadius);
+  const styles = useMemo(
+    () => createStyles(theme.primaryColor, theme.borderRadius),
+    [theme.primaryColor, theme.borderRadius]
+  );
 
   // ── Render ────────────────────────────────────────────────────────────────
 

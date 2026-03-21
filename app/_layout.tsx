@@ -1,4 +1,7 @@
 // app/_layout.tsx
+// Root layout — wraps the app in Auth, Theme and Paper providers.
+// Branch/restaurant resolution is now handled inside ThemeProvider
+// based on the logged-in user's profile — no EXPO_PUBLIC_BRANCH_ID needed.
 
 import { useEffect } from 'react';
 import { Stack } from 'expo-router';
@@ -13,8 +16,6 @@ async function bootstrapOneSignal() {
     // initOneSignal registers the pushSubscription.change listener.
     // That listener calls saveOneSignalId() the moment OneSignal assigns
     // a subscription ID — regardless of which screen the user is on.
-    // This guarantees onesignal_user_id is always written to the DB on
-    // every launch, so the Edge Function can always find it.
     initOneSignal();
     await requestPermission();
   } catch (err) {
@@ -23,15 +24,14 @@ async function bootstrapOneSignal() {
 }
 
 export default function RootLayout() {
-  const BRANCH_ID = process.env.EXPO_PUBLIC_BRANCH_ID ?? '';
-
   useEffect(() => {
     bootstrapOneSignal();
   }, []);
 
   return (
     <AuthProvider>
-      <AppThemeProvider branchId={BRANCH_ID}>
+      {/* branchId prop omitted — ThemeProvider resolves it from auth profile */}
+      <AppThemeProvider>
         <PaperProvider>
           <Stack screenOptions={{ headerShown: false }} />
         </PaperProvider>

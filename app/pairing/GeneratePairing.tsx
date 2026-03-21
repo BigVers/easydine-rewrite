@@ -5,12 +5,16 @@
 // Flow:
 //   1. Patron enters table name → app generates QR code
 //   2. QR is displayed on screen
-//   3. A Supabase Realtime subscription listens for a new pairing
-//      row where requestor_id = this device's UUID
-//   4. When the waiter scans → pairing row is inserted in DB →
-//      Realtime fires → patron tablet redirects to /menu
+//   3. A Supabase Realtime subscription listens for INSERT events on
+//      pairings where requestor_id = this device's UUID
+//   4. When the waiter scans → pair_device RPC inserts a new pairing row →
+//      Realtime fires → patron tablet shows success state, then redirects to /menu
+//
+// Fix: redirect is driven by React state (pairingDetected) in a useEffect
+// rather than inside a setTimeout closure — this prevents stale-closure
+// cancellation from blocking the navigation.
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -42,11 +46,26 @@ export default function GeneratePairing() {
   // Keep subscription ref so we can unsubscribe on unmount / reset
   const subscriptionRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // ── Subscribe to pairings for this device once QR is shown ────────────────
+  // ── Navigate to menu once pairing is confirmed ────────────────────────────
+  // Driving navigation from state (not inside a subscription callback)
+  // prevents stale-closure issues where the closure's `cancelled` flag
+  // could silently abort the redirect.
+  useEffect(() => {
+    if (!pairingDetected) return;
+
+    // Small delay so the patron briefly sees the "Waiter Connected!" confirmation
+    const timer = setTimeout(() => {
+      router.replace('/menu');
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [pairingDetected, router]);
+
+  // ── Subscribe to pairings for this device once QR is shown ───────────────
   useEffect(() => {
     if (!result) return; // only subscribe when QR is displayed
 
-    let cancelled = false;
+    let mounted = true;
 
     const setupSubscription = async () => {
       const deviceId = await getDeviceId();
@@ -67,20 +86,15 @@ export default function GeneratePairing() {
             filter: `requestor_id=eq.${deviceId}`,
           },
           (payload) => {
-            if (cancelled) return;
-            console.log('[GeneratePairing] Pairing detected:', payload.new);
+            console.log('[GeneratePairing] Pairing INSERT detected:', payload.new);
+            if (!mounted) return;
+            // Only react to active pairings (safety check)
+            if (payload.new?.is_active === false) return;
             setPairingDetected(true);
-
-            // Small delay so the patron sees the confirmation briefly
-            setTimeout(() => {
-              if (!cancelled) {
-                router.replace('/menu');
-              }
-            }, 1200);
           }
         )
-        .subscribe((status) => {
-          console.log('[GeneratePairing] Realtime status:', status);
+        .subscribe((status, err) => {
+          console.log('[GeneratePairing] Realtime status:', status, err ?? '');
         });
 
       subscriptionRef.current = channel;
@@ -89,7 +103,7 @@ export default function GeneratePairing() {
     setupSubscription();
 
     return () => {
-      cancelled = true;
+      mounted = false;
       if (subscriptionRef.current) {
         supabase.removeChannel(subscriptionRef.current);
         subscriptionRef.current = null;
@@ -134,7 +148,10 @@ export default function GeneratePairing() {
     setPairingDetected(false);
   };
 
-  const styles = createStyles(theme.primaryColor, theme.borderRadius);
+  const styles = useMemo(
+    () => createStyles(theme.primaryColor, theme.borderRadius),
+    [theme.primaryColor, theme.borderRadius]
+  );
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -156,7 +173,7 @@ export default function GeneratePairing() {
           /* ── QR Code display ── */
           <View style={styles.qrSection}>
             {pairingDetected ? (
-              /* Waiter has scanned — show confirmation before redirect */
+              /* Waiter has scanned — show confirmation while redirect timer runs */
               <View style={styles.successBox}>
                 <Text style={styles.successIcon}>✅</Text>
                 <Text style={[styles.successTitle, { color: theme.primaryColor }]}>

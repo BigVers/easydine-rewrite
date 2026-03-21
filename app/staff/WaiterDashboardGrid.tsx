@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -127,7 +128,12 @@ export default function WaiterDashboardGrid() {
     return (
       <View style={{ flex: 1, backgroundColor: theme.backgroundColor }}>
         <View style={[styles.dashHeader, { borderBottomColor: theme.primaryColor }]}>
-          <Text style={[styles.dashTitle, { color: theme.textColor }]}>Waiter Dashboard</Text>
+          <View style={styles.dashTitleRow}>
+            {theme.logoUrl ? (
+              <Image source={{ uri: theme.logoUrl }} style={styles.headerLogo} resizeMode="contain" />
+            ) : null}
+            <Text style={[styles.dashTitle, { color: theme.textColor }]}>Waiter Dashboard</Text>
+          </View>
           <TouchableOpacity
             style={[styles.scanBtn, { backgroundColor: theme.primaryColor }]}
             onPress={() => router.push('/pairing/PairDevices')}
@@ -144,11 +150,16 @@ export default function WaiterDashboardGrid() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.backgroundColor }}>
-      {/* ── Header with Scan button ─────────────────────────────── */}
+      {/* ── Header with logo and Scan button ── */}
       <View style={[styles.dashHeader, { borderBottomColor: theme.primaryColor }]}>
-        <Text style={[styles.dashTitle, { color: theme.textColor }]}>
-          Waiter Dashboard
-        </Text>
+        <View style={styles.dashTitleRow}>
+          {theme.logoUrl ? (
+            <Image source={{ uri: theme.logoUrl }} style={styles.headerLogo} resizeMode="contain" />
+          ) : null}
+          <Text style={[styles.dashTitle, { color: theme.textColor }]}>
+            Waiter Dashboard
+          </Text>
+        </View>
         <TouchableOpacity
           style={[styles.scanBtn, { backgroundColor: theme.primaryColor }]}
           onPress={() => router.push('/pairing/PairDevices')}
@@ -263,6 +274,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 2,
+  },
+  dashTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  headerLogo: {
+    width: 36,
+    height: 36,
+    borderRadius: 6,
   },
   dashTitle: { fontSize: 18, fontWeight: '700' },
   scanBtn: {

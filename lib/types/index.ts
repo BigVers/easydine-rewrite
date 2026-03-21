@@ -41,7 +41,7 @@ export interface Branch {
 
 export interface RestaurantCustomisation {
   id: string;
-  branch_id: string;
+  restaurant_id: string;       // matches actual schema column
   primary_color: string;
   secondary_color: string;
   background_color: string;
@@ -168,5 +168,7 @@ export interface AppTheme {
   backgroundColor: string;
   textColor: string;
   fontFamily: string;
+  logoUrl: string | null;     // restaurant logo — show in headers
+  bannerUrl: string | null;   // hero banner — show on patron home screen
   borderRadius: number;
 }

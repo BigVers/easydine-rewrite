@@ -1,10 +1,22 @@
 // app/index.tsx
 // Patron home screen (requestor device).
+// Shows the restaurant logo/banner from restaurant_customisations,
+// pairing status, Order Food, and quick service-request buttons.
+//
+// Fix: pairingId is refreshed every time the screen comes into focus
+// (using useFocusEffect) so that after returning from the menu or pairing
+// screens the status card and service buttons reflect the current state.
+//
+// Session lifecycle:
+//   - Session starts when the waiter scans the QR (pairing is created)
+//   - Session ends when the waiter marks the bill as paid (pairing deactivated)
+//   - On session end the home screen shows "Table not paired yet" again
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,6 +24,7 @@ import {
   View,
 } from 'react-native';
 import { Redirect, useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { useTheme } from '../lib/ThemeContext';
 import { useAuth } from '../lib/AuthContext';
@@ -50,19 +63,31 @@ export default function HomeScreen() {
   const { theme } = useTheme();
   const { session, profile, isLoading: authLoading } = useAuth();
 
-  // ✅ All hooks BEFORE any conditional return (Rules of Hooks)
   const [pairingId, setPairingId] = useState<string | null>(null);
   const [isPairingLoading, setIsPairingLoading] = useState(true);
   const [sendingId, setSendingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    getActivePairingId().then((id) => {
-      setPairingId(id);
-      setIsPairingLoading(false);
-    });
-  }, []);
+  // ── Refresh pairing status every time the screen comes into focus ──────────
+  // This ensures:
+  //   1. After returning from the menu, pairing status is still shown correctly
+  //   2. After the waiter marks bill as paid (pairing deactivated), the screen
+  //      correctly shows "Table not paired yet" on next focus
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      setIsPairingLoading(true);
 
-  // Declarative auth guard — AFTER all hooks
+      getActivePairingId().then((id) => {
+        if (!active) return;
+        setPairingId(id);
+        setIsPairingLoading(false);
+      });
+
+      return () => { active = false; };
+    }, [])
+  );
+
+  // Logged-in staff get redirected to their dashboard
   if (!authLoading && session && profile) {
     return <Redirect href="/notifications" />;
   }
@@ -105,14 +130,39 @@ export default function HomeScreen() {
     router.push('/menu');
   };
 
-  const styles = createStyles(theme.primaryColor, theme.borderRadius);
+  const styles = useMemo(
+    () => createStyles(theme.primaryColor, theme.borderRadius),
+    [theme.primaryColor, theme.borderRadius]
+  );
 
   return (
     <ScrollView
       style={{ backgroundColor: theme.backgroundColor }}
       contentContainerStyle={styles.container}
     >
+      {/* ── Brand header ── */}
       <View style={styles.brandHeader}>
+        {theme.bannerUrl ? (
+          <Image
+            source={{ uri: theme.bannerUrl }}
+            style={styles.banner}
+            resizeMode="cover"
+          />
+        ) : null}
+
+        {theme.logoUrl ? (
+          <Image
+            source={{ uri: theme.logoUrl }}
+            style={[
+              styles.logo,
+              theme.bannerUrl ? styles.logoOverBanner : null,
+            ]}
+            resizeMode="contain"
+          />
+        ) : (
+          <Text style={[styles.logoEmoji, { color: theme.primaryColor }]}>🍽️</Text>
+        )}
+
         <Text style={[styles.welcome, { color: theme.textColor, fontFamily: theme.fontFamily }]}>
           Welcome
         </Text>
@@ -121,7 +171,7 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      {/* Pairing status */}
+      {/* ── Pairing status ── */}
       <View style={[styles.statusCard, { borderColor: pairingId ? '#4CAF50' : '#FF9800' }]}>
         {isPairingLoading ? (
           <ActivityIndicator color={theme.primaryColor} />
@@ -149,19 +199,29 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Scan QR — waiter scans patron's code */}
+      {/* ── Staff: scan patron QR ── */}
       <TouchableOpacity
-        style={[styles.scanBtn, { borderColor: theme.primaryColor, borderRadius: theme.borderRadius }]}
+        style={[
+          styles.scanQrBtn,
+          {
+            borderColor: theme.primaryColor,
+            borderRadius: theme.borderRadius,
+            backgroundColor: theme.backgroundColor,
+          },
+        ]}
         onPress={() => router.push('/pairing/PairDevices')}
+        activeOpacity={0.85}
       >
-        <Text style={styles.scanBtnIcon}>📷</Text>
-        <View>
-          <Text style={[styles.scanBtnLabel, { color: theme.primaryColor }]}>Scan QR Code</Text>
-          <Text style={[styles.scanBtnSub, { color: theme.textColor }]}>Pair with a patron table</Text>
+        <Text style={styles.scanQrBtnIcon}>📷</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.scanQrBtnLabel, { color: theme.textColor }]}>Scan QR Code</Text>
+          <Text style={[styles.scanQrBtnSub, { color: theme.textColor }]}>
+            Staff: pair with a table by scanning their code
+          </Text>
         </View>
       </TouchableOpacity>
 
-      {/* Order food */}
+      {/* ── Order food — primary CTA ── */}
       <TouchableOpacity
         style={[styles.orderBtn, { backgroundColor: theme.primaryColor, borderRadius: theme.borderRadius }]}
         onPress={handleOrderFood}
@@ -173,7 +233,7 @@ export default function HomeScreen() {
         </View>
       </TouchableOpacity>
 
-      {/* Quick requests */}
+      {/* ── Quick requests ── */}
       <Text style={[styles.sectionTitle, { color: theme.textColor }]}>Quick Requests</Text>
       <View style={styles.grid}>
         {SERVICE_BUTTONS.map((btn) => (
@@ -201,34 +261,50 @@ export default function HomeScreen() {
 
 function createStyles(primaryColor: string, borderRadius: number) {
   return StyleSheet.create({
-    container: { padding: 24, gap: 20 },
-    brandHeader: { alignItems: 'center', paddingVertical: 16 },
-    welcome: { fontSize: 32, fontWeight: 'bold' },
-    tagline: { fontSize: 16, opacity: 0.7, marginTop: 4 },
+    container: { gap: 20, paddingBottom: 32 },
+
+    brandHeader: { alignItems: 'center' },
+    banner: { width: '100%', height: 180 },
+    logo: {
+      width: 100, height: 100, borderRadius: 12,
+      marginTop: 16, backgroundColor: '#fff',
+    },
+    logoOverBanner: {
+      marginTop: -40, borderWidth: 3, borderColor: '#fff',
+      elevation: 4, shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
+    },
+    logoEmoji: { fontSize: 56, marginTop: 24 },
+    welcome: { fontSize: 28, fontWeight: 'bold', marginTop: 12 },
+    tagline: { fontSize: 15, opacity: 0.65, marginTop: 4, marginBottom: 8 },
 
     statusCard: {
       flexDirection: 'row', alignItems: 'center', gap: 12,
       padding: 16, borderRadius: 12, borderWidth: 1.5, backgroundColor: '#fff',
+      marginHorizontal: 24,
     },
     statusDot: { fontSize: 20 },
     statusText: { fontSize: 14, flex: 1 },
     pairLink: { fontSize: 14, fontWeight: '600', marginTop: 4 },
 
-    scanBtn: {
+    scanQrBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 16,
-      padding: 18, borderWidth: 1.5, backgroundColor: '#fff',
+      padding: 18, marginHorizontal: 24, borderWidth: 2,
     },
-    scanBtnIcon: { fontSize: 32 },
-    scanBtnLabel: { fontSize: 17, fontWeight: '700' },
-    scanBtnSub: { fontSize: 12, opacity: 0.6, marginTop: 2 },
+    scanQrBtnIcon: { fontSize: 32 },
+    scanQrBtnLabel: { fontSize: 18, fontWeight: '700' },
+    scanQrBtnSub: { fontSize: 12, opacity: 0.65, marginTop: 2 },
 
-    orderBtn: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 20 },
+    orderBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 16,
+      padding: 20, marginHorizontal: 24,
+    },
     orderBtnIcon: { fontSize: 36 },
     orderBtnLabel: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
     orderBtnSub: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
 
-    sectionTitle: { fontSize: 16, fontWeight: '700' },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+    sectionTitle: { fontSize: 16, fontWeight: '700', marginHorizontal: 24 },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 24 },
     gridBtn: { flex: 1, minWidth: 140, padding: 20, alignItems: 'center', borderWidth: 1.5, gap: 8 },
     gridBtnIcon: { fontSize: 32 },
     gridBtnLabel: { fontSize: 14, fontWeight: '600', textAlign: 'center' },
