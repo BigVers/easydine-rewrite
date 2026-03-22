@@ -3,6 +3,11 @@
 // or enter a code manually, completing the pairing.
 //
 // On success → redirected to the notification dashboard.
+//
+// Fix applied: OneSignal ID retry — after pairWithRequestor() completes,
+// we attempt a second waitForPlayerId() if the first timed out.
+// The RPC round-trip gives the OneSignal change event time to fire,
+// so the retry usually succeeds even when the initial wait timed out.
 
 import React, { useMemo, useState } from 'react';
 import {
@@ -34,7 +39,6 @@ export default function PairDevices() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const [scanMode, setScanMode] = useState<ScanMode>(null);
-
   const [manualCode, setManualCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,19 +97,22 @@ export default function PairDevices() {
       // Ensure this device is registered as a receiver before pairing
       await registerDevice({ deviceType: 'receiver', deviceName: 'Waiter Device' });
 
-      // Wait for OneSignal subscription ID to be available and saved to DB
-      // before completing the pairing — the Edge Function needs it to deliver push.
+      // ── OneSignal ID: first attempt ────────────────────────────────────────
+      // Try to get the subscription ID before the pairing RPC so the Edge
+      // Function can deliver push immediately after the pairing completes.
       console.log('[PairDevices] Waiting for OneSignal subscription ID...');
-      const playerId = await waitForPlayerId(10000);
+      let playerId = await waitForPlayerId(10_000);
+
       if (playerId) {
-        console.log('[PairDevices] ✅ OneSignal ID confirmed, saving to DB:', playerId);
+        console.log('[PairDevices] ✅ OneSignal ID confirmed (pre-pair):', playerId);
         await saveOneSignalId(playerId);
-        console.log('[PairDevices] ✅ OneSignal ID saved — push notifications will work');
       } else {
-        console.warn('[PairDevices] ⚠️ OneSignal ID timed out — check FCM/OneSignal setup');
+        console.warn(
+          '[PairDevices] ⚠️ OneSignal ID timed out before pairing — will retry after RPC.'
+        );
       }
 
-      // For manual entry (no QR), look up the requestor ID from the pairing_codes table
+      // ── Resolve requestor ID for manual entry ──────────────────────────────
       let resolvedRequestorId = requestorId;
       if (!resolvedRequestorId) {
         const { data: codeRow, error: codeErr } = await supabase
@@ -122,13 +129,39 @@ export default function PairDevices() {
         resolvedRequestorId = codeRow.requestor_id;
       }
 
-      // At this point we must have a valid requestorId
       if (!resolvedRequestorId) {
         throw new Error('Unable to resolve the requestor for this pairing code.');
       }
 
+      // ── Execute pairing RPC ────────────────────────────────────────────────
       await pairWithRequestor({ code, requestorId: resolvedRequestorId });
-      // Receiver (waiter) goes to notifications, which renders WaiterDashboardGrid
+
+      // ── OneSignal ID: retry after RPC (key fix) ────────────────────────────
+      // The RPC round-trip takes ~500ms–2s. During that time the OneSignal
+      // change event often fires. Retry here gives the subscription ID a
+      // second chance to be saved so the Edge Function can deliver push
+      // notifications for this pairing immediately.
+      if (!playerId) {
+        console.log('[PairDevices] Retrying OneSignal ID after RPC...');
+        playerId = await waitForPlayerId(5_000);
+        if (playerId) {
+          console.log('[PairDevices] ✅ OneSignal ID ready (post-pair retry):', playerId);
+          await saveOneSignalId(playerId);
+        } else {
+          // Non-fatal — push notifications will work once the app is
+          // restarted and the subscription ID is obtained from the cache.
+          console.warn(
+            '[PairDevices] ⚠️ OneSignal ID still unavailable after retry.\n' +
+            'Possible causes:\n' +
+            '  • google-services.json missing or wrong package name\n' +
+            '  • Firebase Server Key not set in OneSignal dashboard\n' +
+            '  • Running inside Expo Go (FCM push tokens require a dev/prod build)\n' +
+            'Push notifications will not work until this is resolved.'
+          );
+        }
+      }
+
+      // Receiver (waiter) goes to notifications / WaiterDashboardGrid
       router.replace('/notifications');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Pairing failed. Please try again.';
@@ -167,12 +200,10 @@ export default function PairDevices() {
             barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
             onBarcodeScanned={hasScanned ? undefined : handleBarcodeScanned}
           />
-          {/* Viewfinder overlay */}
           <View style={styles.overlay} pointerEvents="none">
             <View style={styles.viewfinder} />
             <Text style={styles.scanHint}>Position QR code within the frame</Text>
           </View>
-
           <TouchableOpacity
             style={[styles.closeScanner, { backgroundColor: theme.primaryColor }]}
             onPress={() => setScanMode(null)}
@@ -212,13 +243,19 @@ export default function PairDevices() {
               <TextInput
                 style={[
                   styles.input,
-                  { borderColor: theme.primaryColor, color: theme.textColor, borderRadius: theme.borderRadius },
+                  {
+                    borderColor: theme.primaryColor,
+                    color: theme.textColor,
+                    borderRadius: theme.borderRadius,
+                  },
                 ]}
                 placeholder="e.g. ABC123"
                 placeholderTextColor="#999"
                 value={manualCode}
                 onChangeText={(t) => {
-                  setManualCode(t.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CODE_LENGTH));
+                  setManualCode(
+                    t.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CODE_LENGTH)
+                  );
                   setError(null);
                 }}
                 autoCapitalize="characters"
@@ -281,11 +318,7 @@ function createStyles(primaryColor: string, borderRadius: number) {
     content: { padding: 24, gap: 16 },
     description: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
 
-    actionBtn: {
-      paddingVertical: 16,
-      borderRadius: 10,
-      alignItems: 'center',
-    },
+    actionBtn: { paddingVertical: 16, borderRadius: 10, alignItems: 'center' },
     actionBtnText: { color: '#fff', fontSize: 17, fontWeight: '600' },
 
     manualEntry: { gap: 10 },
@@ -302,14 +335,15 @@ function createStyles(primaryColor: string, borderRadius: number) {
     primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
     btnDisabled: { opacity: 0.5 },
 
-    errorBox: {
-      backgroundColor: '#FFEBEE',
-      borderRadius: 8,
-      padding: 12,
-    },
+    errorBox: { backgroundColor: '#FFEBEE', borderRadius: 8, padding: 12 },
     errorText: { color: '#D32F2F', fontSize: 14, textAlign: 'center' },
 
-    loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, justifyContent: 'center' },
+    loadingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      justifyContent: 'center',
+    },
     loadingText: { fontSize: 15 },
 
     // Camera

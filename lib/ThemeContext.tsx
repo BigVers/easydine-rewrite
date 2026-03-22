@@ -8,9 +8,8 @@
 //   3. EXPO_PUBLIC_BRANCH_ID env var  ← patron tablet path (no login)
 //   4. Default theme (no restaurant configured)
 //
-// Fix: EXPO_PUBLIC_BRANCH_ID is now consumed here so that patron tablets
-// (which never log in) correctly resolve a branchId — enabling the menu
-// screen to scope its queries to the right branch.
+// Schema note: restaurant_customisations is keyed by branch_id (UNIQUE),
+// NOT restaurant_id — so we query by branch_id directly.
 
 import React, {
   createContext,
@@ -23,11 +22,22 @@ import { supabase } from './supabase';
 import { useAuth } from './AuthContext';
 import type { AppTheme, RestaurantCustomisation } from './types';
 
-// Patron tablets: branch from EXPO_PUBLIC_BRANCH_ID. Must be a real UUID — placeholders
-// like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx cause Postgres 22P02 and break menu queries.
+// Read once at module load — safe for patron tablets that have no auth session.
+// Validates UUID format before trusting the value — if the placeholder
+// "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" or any other non-UUID value slips
+// through, ENV_BRANCH_ID becomes null and the theme falls back to default
+// gracefully instead of sending a malformed UUID to Supabase (error 22P02).
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const _rawEnvBranchId = process.env.EXPO_PUBLIC_BRANCH_ID?.trim() ?? '';
-const ENV_BRANCH_ID = UUID_RE.test(_rawEnvBranchId) ? _rawEnvBranchId : null;
+const _rawEnvBranchId = process.env.EXPO_PUBLIC_BRANCH_ID ?? '';
+const ENV_BRANCH_ID: string | null = UUID_RE.test(_rawEnvBranchId) ? _rawEnvBranchId : null;
+
+if (!ENV_BRANCH_ID) {
+  console.warn(
+    '[ThemeContext] EXPO_PUBLIC_BRANCH_ID is missing or not a valid UUID:',
+    JSON.stringify(_rawEnvBranchId),
+    '\nSet a real branch UUID in your .env file and restart Metro.'
+  );
+}
 
 const DEFAULT_THEME: AppTheme = {
   primaryColor: '#8B0000',
@@ -85,7 +95,6 @@ export function ThemeProvider({ branchId: propBranchId, children }: ThemeProvide
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchTheme = useCallback(async () => {
-    // ── Debug log — remove once branch resolution is confirmed working ────────
     console.log('[ThemeContext] fetchTheme called. authLoading:', authLoading, '| profile:', profile?.restaurant_id ?? 'no profile');
 
     if (authLoading) return;
@@ -116,14 +125,11 @@ export function ThemeProvider({ branchId: propBranchId, children }: ThemeProvide
     // ── 2. Patron tablet: use EXPO_PUBLIC_BRANCH_ID ───────────────────────────
     if (!branchId) {
       branchId = ENV_BRANCH_ID ?? propBranchId ?? null;
-      console.log(
-        '[ThemeContext] Patron / env branch:',
-        branchId ?? '(none — set EXPO_PUBLIC_BRANCH_ID to a real branch UUID or log in as staff)'
-      );
+      console.log('[ThemeContext] Using ENV_BRANCH_ID:', branchId);
     }
 
+    // ── Resolve restaurant_id from branch if not already known ────────────────
     if (branchId && !restaurantId) {
-      // Resolve restaurant from branch so we can fetch the correct theme
       const { data: branch, error: branchErr } = await supabase
         .from('branches')
         .select('restaurant_id')
@@ -137,20 +143,22 @@ export function ThemeProvider({ branchId: propBranchId, children }: ThemeProvide
     setResolvedBranchId(branchId);
     setResolvedRestaurantId(restaurantId);
 
-    if (!restaurantId) {
-      console.warn('[ThemeContext] No restaurantId resolved — rendering with default theme.');
+    if (!branchId) {
+      console.warn('[ThemeContext] No branchId resolved — rendering with default theme.');
       setIsLoading(false);
       return;
     }
 
-    // ── Fetch customisation for this restaurant ───────────────────────────────
+    // ── Fetch customisation by branch_id (schema uses branch_id as the key) ──
+    // NOTE: the restaurant_customisations table has branch_id as its unique key,
+    // NOT restaurant_id — so we must query by branch_id here.
     const { data, error } = await supabase
       .from('restaurant_customisations')
       .select(
-        'id, restaurant_id, primary_color, secondary_color, background_color, ' +
+        'id, primary_color, secondary_color, background_color, ' +
         'text_color, font_family, logo_url, banner_url, border_radius'
       )
-      .eq('restaurant_id', restaurantId)
+      .eq('branch_id', branchId)
       .maybeSingle();
 
     if (error) {
@@ -158,16 +166,16 @@ export function ThemeProvider({ branchId: propBranchId, children }: ThemeProvide
     }
 
     if (!error && data) {
-      console.log('[ThemeContext] ✅ Theme loaded for restaurant:', restaurantId);
+      console.log('[ThemeContext] ✅ Theme loaded for branch:', branchId);
       setTheme(toAppTheme(data as unknown as RestaurantCustomisation));
+    } else {
+      console.log('[ThemeContext] No customisation row found for branch — using default theme.');
     }
 
     setIsLoading(false);
   }, [authLoading, profile, propBranchId]);
 
-  // FIX: only run fetchTheme after auth has finished loading.
-  // Previously fetchTheme ran immediately (including while authLoading=true),
-  // hit the early return, and sometimes never re-ran when authLoading settled.
+  // Only run fetchTheme after auth has finished loading
   useEffect(() => {
     if (!authLoading) {
       fetchTheme();

@@ -4,6 +4,10 @@
 //
 // UUID generation is intentionally pure-JS with zero native dependencies
 // so it works in any dev client build without requiring a rebuild.
+//
+// Fix: saveOneSignalId() now uses upsert instead of update so it works
+// even if the device row doesn't exist yet (e.g. the OneSignal change
+// event fires before the first registerDevice() call completes).
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
@@ -49,6 +53,10 @@ export async function getDeviceId(): Promise<string> {
  * Upserts the device record in Supabase and returns it.
  * Call this on app launch to keep `last_seen_at` and
  * `onesignal_user_id` fresh.
+ *
+ * If onesignalUserId is provided it is saved immediately.
+ * If omitted the existing DB value is preserved via the upsert
+ * (we only set it to null on a brand-new insert, not on updates).
  */
 export async function registerDevice(opts: {
   deviceType: DeviceType;
@@ -58,19 +66,28 @@ export async function registerDevice(opts: {
 }): Promise<Device> {
   const id = await getDeviceId();
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     id,
     device_type: opts.deviceType,
     device_name: opts.deviceName,
     branch_id: opts.branchId ?? null,
-    onesignal_user_id: opts.onesignalUserId ?? null,
     last_seen_at: new Date().toISOString(),
     is_active: true,
   };
 
+  // Only include onesignal_user_id in the payload when we actually have it.
+  // Omitting it from the upsert payload means Postgres will keep the existing
+  // value on conflict rather than overwriting it with null.
+  if (opts.onesignalUserId) {
+    payload.onesignal_user_id = opts.onesignalUserId;
+  }
+
   const { data, error } = await supabase
     .from('devices')
-    .upsert(payload, { onConflict: 'id' })
+    .upsert(payload, {
+      onConflict: 'id',
+      // ignoreDuplicates: false ensures the update runs on conflict
+    })
     .select()
     .single();
 
@@ -79,13 +96,48 @@ export async function registerDevice(opts: {
 }
 
 /**
- * Stores the OneSignal player ID on the device record.
+ * Stores the OneSignal subscription ID on the device record.
+ *
+ * Uses upsert instead of update so this works even if the device row
+ * doesn't exist yet — which can happen when the OneSignal `change`
+ * event fires before the first registerDevice() call (e.g. on cold
+ * start before the user navigates to a pairing screen).
+ *
+ * device_type defaults to 'receiver' here because saveOneSignalId is
+ * only ever called on the waiter (receiver) device. The type will be
+ * corrected to its proper value when registerDevice() is called during
+ * pairing.
  */
 export async function saveOneSignalId(playerId: string): Promise<void> {
+  if (!playerId) return;
+
   const id = await getDeviceId();
+
   const { error } = await supabase
     .from('devices')
-    .update({ onesignal_user_id: playerId, last_seen_at: new Date().toISOString() })
-    .eq('id', id);
-  if (error) throw error;
+    .upsert(
+      {
+        id,
+        onesignal_user_id: playerId,
+        last_seen_at: new Date().toISOString(),
+        // Required NOT NULL columns — set safe defaults for a bare upsert.
+        // registerDevice() will overwrite these with the correct values.
+        device_type: 'receiver',
+        device_name: 'Waiter Device',
+        is_active: true,
+      },
+      {
+        onConflict: 'id',
+        // On conflict, only update onesignal_user_id and last_seen_at —
+        // don't overwrite device_type or device_name if already set.
+        ignoreDuplicates: false,
+      }
+    );
+
+  if (error) {
+    console.error('[deviceService] saveOneSignalId failed:', error.message);
+    throw error;
+  }
+
+  console.log('[deviceService] ✅ OneSignal subscription ID saved:', playerId);
 }

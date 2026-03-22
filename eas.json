@@ -8,7 +8,10 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_ONESIGNAL_APP_ID": "18516768-760d-4335-966f-efabc39d1610"
+        "EXPO_PUBLIC_SUPABASE_URL": "https://piyfojswoxzhhflweldf.supabase.co",
+		    "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBpeWZvanN3b3h6aGhmbHdlbGRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTEwNjAzNzQsImV4cCI6MjA2NjYzNjM3NH0.2zfK2HnalVOScpbPIc-_wrILchq1rzoIeQZ5pTwE9lo",
+		    "EXPO_PUBLIC_ONESIGNAL_APP_ID": "18516768-760d-4335-966f-efabc39d1610",
+		    "EXPO_PUBLIC_BRANCH_ID": "f6cbfe3b-dd2f-481b-90aa-df9c42208a3a"
       }
     },
     "preview": {
