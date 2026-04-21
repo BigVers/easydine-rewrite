@@ -24,7 +24,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 
 import { useTheme } from '../../lib/ThemeContext';
-import { pairWithRequestor, parseQRData } from '../../lib/pairingService';
+import { pairWithRequestor, parseQRData, registerReceiverForTable } from '../../lib/pairingService';
 import { registerDevice, saveOneSignalId } from '../../lib/deviceService';
 import { waitForPlayerId } from '../../lib/oneSignalManager';
 import { supabase } from '../../lib/supabase';
@@ -70,6 +70,23 @@ export default function PairDevices() {
     setHasScanned(true);
     setScanMode(null);
 
+    // ── Table QR (printed URL): http(s)://...?branchId=UUID&tableName=...
+    // This is what the printed QR encodes — a web URL that opens in the
+    // patron's browser. The waiter's scanner reads the same URL and extracts
+    // branchId + tableName to register themselves as on-duty for that table.
+    try {
+      const url = new URL(data);
+      const branchId  = url.searchParams.get('branchId');
+      const tableName = url.searchParams.get('tableName');
+      if (branchId && tableName) {
+        completeTableRegistration(branchId, tableName);
+        return;
+      }
+    } catch {
+      // Not a URL — fall through to session QR check
+    }
+
+    // ── Session QR (dynamic): APP:EASYDINE:<code>:<requestorId>
     const parsed = parseQRData(data);
     if (!parsed) {
       setError('Invalid QR code. Please scan an EasyDine pairing code.');
@@ -87,6 +104,41 @@ export default function PairDevices() {
     }
     setScanMode(null);
     completePairing(code, null);
+  };
+
+  /**
+   * Called when the waiter scans a PRINTED TABLE QR.
+   * Registers their device as on-duty receiver for that table.
+   * No pairing is created yet — the pairing happens when a patron
+   * scans the same QR on the web app.
+   */
+  const completeTableRegistration = async (branchId: string, tableName: string) => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      await registerDevice({ deviceType: 'receiver', deviceName: 'Waiter Device' });
+
+      // Save OneSignal ID so push notifications work immediately
+      let playerId = await waitForPlayerId(10_000);
+      if (playerId) {
+        await saveOneSignalId(playerId);
+      }
+
+      await registerReceiverForTable(branchId, tableName);
+
+      Alert.alert(
+        '✅ Table Registered',
+        `You are now on duty for ${tableName}. Patrons who scan this table's QR code will be connected to you.`,
+        [{ text: 'OK', onPress: () => router.replace('/notifications') }]
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Registration failed. Please try again.';
+      setError(msg);
+      setHasScanned(false);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const completePairing = async (code: string, requestorId: string | null) => {
@@ -217,7 +269,8 @@ export default function PairDevices() {
       {scanMode !== 'scan' && (
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={[styles.description, { color: theme.textColor }]}>
-            Scan the QR code on the patron's tablet or enter the pairing code manually.
+            Scan the printed table QR code to register yourself as on-duty for that table,
+            or enter a patron's pairing code manually.
           </Text>
 
           <TouchableOpacity

@@ -22,7 +22,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 
 import { useTheme } from '../../lib/ThemeContext';
 import { supabase } from '../../lib/supabase';
@@ -77,6 +77,9 @@ export default function MenuScreen() {
   const router = useRouter();
   const { theme, branchId } = useTheme();
 
+  // Deep link params — set when opened via easydine://menu?pairingId=X&tableName=Y
+  const params = useLocalSearchParams<{ pairingId?: string; tableName?: string; branchId?: string }>();
+
   const [allItems, setAllItems] = useState<ResolvedMenuItem[]>([]);
   const [menuTabs, setMenuTabs] = useState<MenuTab[]>([]);
   const [selectedMenuId, setSelectedMenuId] = useState<string | null>(null);
@@ -113,8 +116,17 @@ export default function MenuScreen() {
   }, [slideAnim]);
 
   // ── Load pairing info ─────────────────────────────────────────────────────
+  // Priority: deep link params (from web QR scan) > stored active pairing
 
   useEffect(() => {
+    // If opened via easydine://menu?pairingId=X deep link, use those params directly
+    if (params.pairingId) {
+      setPairingId(params.pairingId);
+      setTableName(params.tableName ?? '');
+      return;
+    }
+
+    // Otherwise fall back to the stored active pairing (standard in-app flow)
     getActivePairingId().then(async (id) => {
       setPairingId(id);
       if (id) {
@@ -126,7 +138,7 @@ export default function MenuScreen() {
         setTableName(data?.table_name ?? '');
       }
     });
-  }, []);
+  }, [params.pairingId, params.tableName]);
 
   // ── Load menu ─────────────────────────────────────────────────────────────
 
